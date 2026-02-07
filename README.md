@@ -1,5 +1,3 @@
-# arti560-computer-vision-labs
-
 # ARTI 560 Computer Vision Laboratory 
 
 ## Overview
