@@ -1,5 +1,9 @@
+import os
 import cv2
 import numpy as np
+
+RESULTS_DIR = os.path.join(os.path.dirname(__file__), "..", "results")
+SAVE_AT_FRAME = 30  # save a representative frame after this many frames
 
 
 def lucas_kanade_method(video_path):
@@ -20,6 +24,7 @@ def lucas_kanade_method(video_path):
     p0 = cv2.goodFeaturesToTrack(old_gray, mask=None, **feature_params)
     # Create a mask image for drawing purposes
     mask = np.zeros_like(old_frame)
+    frame_idx = 0
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -45,6 +50,15 @@ def lucas_kanade_method(video_path):
             mask = cv2.line(mask, (a, b), (c, d), color[i].tolist(), 2)
             frame = cv2.circle(frame, (a, b), 5, color[i].tolist(), -1)
         img = cv2.add(frame, mask)
+
+        # Save a representative frame to results/
+        frame_idx += 1
+        if frame_idx == SAVE_AT_FRAME:
+            os.makedirs(RESULTS_DIR, exist_ok=True)
+            out_path = os.path.join(RESULTS_DIR, "LucasKanade.png")
+            cv2.imwrite(out_path, img)
+            print(f"[Saved] {out_path}")
+
         cv2.imshow("frame", img)
         k = cv2.waitKey(25) & 0xFF
         if k == 27:
