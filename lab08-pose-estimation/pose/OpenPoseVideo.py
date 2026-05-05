@@ -6,21 +6,32 @@ import os
 
 parser = argparse.ArgumentParser(description='Run keypoint detection')
 parser.add_argument("--device", default="cpu", help="Device to inference on")
-parser.add_argument("--video_file", default="sample_video.mp4", help="Input Video")
+parser.add_argument("--video_file", default="../media/skydiving.mp4", help="Input Video")
+parser.add_argument(
+    "--output",
+    default=None,
+    help="Output video path. Defaults to <input-name>_openpose.avi.",
+)
+parser.add_argument(
+    "--show",
+    action="store_true",
+    help="Display frames while processing. Omit this on headless systems.",
+)
 
 args = parser.parse_args()
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 MODE = "MPI"
 
 if MODE == "COCO":
-    protoFile = "./coco/pose_deploy_linevec.prototxt"
-    weightsFile = "./coco/pose_iter_440000.caffemodel"
+    protoFile = os.path.join(SCRIPT_DIR, "coco", "pose_deploy_linevec.prototxt")
+    weightsFile = os.path.join(SCRIPT_DIR, "coco", "pose_iter_440000.caffemodel")
     nPoints = 18
     POSE_PAIRS = [ [1,0],[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],[1,11],[11,12],[12,13],[0,14],[0,15],[14,16],[15,17]]
 
 elif MODE == "MPI" :
-    protoFile = "./mpi/pose_deploy_linevec_faster_4_stages.prototxt"
-    weightsFile = "./mpi/pose_iter_160000.caffemodel"
+    protoFile = os.path.join(SCRIPT_DIR, "mpi", "pose_deploy_linevec_faster_4_stages.prototxt")
+    weightsFile = os.path.join(SCRIPT_DIR, "mpi", "pose_iter_160000.caffemodel")
     nPoints = 15
     POSE_PAIRS = [[0,1], [1,2], [2,3], [3,4], [1,5], [5,6], [6,7], [1,14], [14,8], [8,9], [9,10], [14,11], [11,12], [12,13] ]
 
@@ -31,12 +42,36 @@ threshold = 0.1
 
 
 input_source = args.video_file
+if not os.path.exists(input_source) and not os.path.isabs(input_source):
+    input_source = os.path.normpath(os.path.join(SCRIPT_DIR, input_source))
+if not os.path.exists(input_source):
+    raise FileNotFoundError(f"Input video not found: {input_source}")
+
+if not os.path.exists(protoFile):
+    raise FileNotFoundError(f"OpenPose prototxt not found: {protoFile}")
+if not os.path.exists(weightsFile):
+    raise FileNotFoundError(
+        f"OpenPose weights not found: {weightsFile}. "
+        "Download the required .caffemodel file listed in the lab README."
+    )
+
 cap = cv2.VideoCapture(input_source)
 hasFrame, frame = cap.read()
+if not hasFrame:
+    raise RuntimeError(f"Unable to read the first frame from {input_source}")
 
 save_name = os.path.splitext(os.path.basename(input_source))[0]
-print(save_name)
-vid_writer = cv2.VideoWriter(f"{save_name}_openpose.avi",cv2.VideoWriter_fourcc('M','J','P','G'), 10, (frame.shape[1],frame.shape[0]))
+output_path = args.output or f"{save_name}_openpose.avi"
+print(f"Processing {input_source}")
+print(f"Saving output to {output_path}")
+vid_writer = cv2.VideoWriter(
+    output_path,
+    cv2.VideoWriter_fourcc('M','J','P','G'),
+    cap.get(cv2.CAP_PROP_FPS) or 10,
+    (frame.shape[1],frame.shape[0]),
+)
+if not vid_writer.isOpened():
+    raise RuntimeError(f"Unable to create output video writer for {output_path}")
 
 net = cv2.dnn.readNetFromCaffe(protoFile, weightsFile)
 if args.device == "cpu":
@@ -47,13 +82,9 @@ elif args.device == "gpu":
     net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
     print("Using GPU device")
 
-while cv2.waitKey(1) < 0:
+while hasFrame:
     t = time.time()
-    hasFrame, frame = cap.read()
     frameCopy = np.copy(frame)
-    if not hasFrame:
-        cv2.waitKey()
-        break
 
     frameWidth = frame.shape[1]
     frameHeight = frame.shape[0]
@@ -100,9 +131,16 @@ while cv2.waitKey(1) < 0:
 
     cv2.putText(frame, "time taken = {:.2f} sec".format(time.time() - t), (50, 50), cv2.FONT_HERSHEY_COMPLEX, .8, (255, 50, 0), 2, lineType=cv2.LINE_AA)
     # cv2.putText(frame, "OpenPose using OpenCV", (50, 50), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 50, 0), 2, lineType=cv2.LINE_AA)
-    # cv2.imshow('Output-Keypoints', frameCopy)
-    #cv2.imshow('Output-Skeleton', frame)
+    if args.show:
+        cv2.imshow('Output-Keypoints', frameCopy)
+        cv2.imshow('Output-Skeleton', frame)
+        if cv2.waitKey(1) == ord('q'):
+            break
 
     vid_writer.write(frame)
+    hasFrame, frame = cap.read()
 
 vid_writer.release()
+cap.release()
+if args.show:
+    cv2.destroyAllWindows()

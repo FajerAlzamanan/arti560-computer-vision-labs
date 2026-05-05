@@ -1,4 +1,6 @@
 import time
+import argparse
+from pathlib import Path
 import torch
 import cv2
 import numpy as np
@@ -10,11 +12,9 @@ from utils.plots    import output_to_keypoint, plot_skeleton_kpts
 
 
 def pose_video(frame):
-    mapped_img = frame.copy()
+    original_h, original_w = frame.shape[:2]
     # Letterbox resizing.
     img = letterbox(frame, input_size, stride=64, auto=True)[0]
-    print(img.shape)
-    img_ = img.copy()
     # Convert the array to 4D.
     img = transforms.ToTensor()(img)
     # Convert the array to Tensor.
@@ -45,12 +45,47 @@ def pose_video(frame):
     for idx in range(output.shape[0]):
         plot_skeleton_kpts(nimg, output[idx, 7:].T, 3)
         
+    nimg = cv2.resize(nimg, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
     return nimg, fps
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run YOLOv7 pose estimation on a video.")
+    parser.add_argument(
+        "--video-file",
+        default="../media/skydiving.mp4",
+        help="Path to the input video.",
+    )
+    parser.add_argument(
+        "--weights",
+        default="yolov7-w6-pose.pt",
+        help="Path to the YOLOv7 pose weights file.",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output video path. Defaults to <input-name>_yolov7.avi.",
+    )
+    parser.add_argument(
+        "--input-size",
+        type=int,
+        default=256,
+        help="Forward pass input size.",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display frames while processing. Omit this on headless systems.",
+    )
+    return parser.parse_args()
+
+
+args = parse_args()
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 #------------------------------------------------------------------------------#
 # Change forward pass input size.
-input_size = 256
+input_size = args.input_size
 
 #---------------------------INITIALIZATIONS------------------------------------#
 
@@ -62,55 +97,71 @@ else:
 print('Selected Device : ', device)
 
 # Load keypoint detection model.
-weights = torch.load('yolov7-w6-pose.pt', map_location=torch.device('cpu'), weights_only=False)
+weights_path = Path(args.weights)
+if not weights_path.exists() and not weights_path.is_absolute():
+    weights_path = SCRIPT_DIR / weights_path
+if not weights_path.exists():
+    raise FileNotFoundError(
+        f"YOLOv7 pose weights not found: {weights_path}. "
+        "Download yolov7-w6-pose.pt and place it in the yolov7 directory, "
+        "or pass its path with --weights."
+    )
+
+weights = torch.load(weights_path, map_location=torch.device('cpu'), weights_only=False)
 model = weights['model']
 # Load the model in evaluation mode.
 _ = model.float().eval()
 # Load the model to computation device [cpu/gpu/tpu]
 model.to(device)
 
-# Provide the list of paths to your chosen videos her
-videos = [
-        'skydiving',
-        'far-away']
+vid_path = Path(args.video_file)
+if not vid_path.exists() and not vid_path.is_absolute():
+    vid_path = SCRIPT_DIR / vid_path
+if not vid_path.exists():
+    raise FileNotFoundError(f"Input video not found: {vid_path}")
 
-file_name = videos[0] + '.mp4'
-vid_path = '../media/' + file_name
-
-cap = cv2.VideoCapture(vid_path)
+save_name = vid_path.stem
+output_path = Path(args.output) if args.output else Path(f"{save_name}_yolov7.avi")
+cap = cv2.VideoCapture(str(vid_path))
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 ret, frame = cap.read()
-h, w, _ = frame.shape
-
-# May need to change the w, h as letterbox function reshapes the image.
-#out = cv2.VideoWriter('./' + file_name + '_yolov7', 
-#                       cv2.VideoWriter_fourcc(*'mp4v'), 
-#                       fps, (w, h))
-
-out = cv2.VideoWriter(f"{save_name}_yolo7.avi",cv2.VideoWriter_fourcc('M','J','P','G'), 10, w,h)
+if not ret:
+    raise RuntimeError(f"Unable to read the first frame from {vid_path}")
+out = None
 
 #-------------------------------------------------------------------------------#
 
 
 if __name__ == '__main__':
-    while True:
-        ret, frame = cap.read()
-        
-        if not ret:
-            print('Unable to read frame. Exiting ..')
-            break
-
+    print(f"Processing {vid_path}")
+    print(f"Saving output to {output_path}")
+    while ret:
         img, fps_ = pose_video(frame)
 
         cv2.putText(img, 'FPS : {:.2f}'.format(fps_), (200, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2, cv2.LINE_AA)
         cv2.putText(img, 'YOLOv7', (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2, cv2.LINE_AA)
 
-        cv2.imshow('Output', img[...,::-1])
+        if out is None:
+            out_h, out_w = img.shape[:2]
+            out = cv2.VideoWriter(
+                str(output_path),
+                cv2.VideoWriter_fourcc('M','J','P','G'),
+                fps if fps > 0 else 10,
+                (out_w, out_h),
+            )
+            if not out.isOpened():
+                raise RuntimeError(f"Unable to create output video writer for {output_path}")
+
         out.write(img[...,::-1])
-        key = cv2.waitKey(1)
-        if key == ord('q'):
-        	break
+        if args.show:
+            cv2.imshow('Output', img[...,::-1])
+            key = cv2.waitKey(1)
+            if key == ord('q'):
+                break
+        ret, frame = cap.read()
 
     cap.release()
-    out.release()
-    cv2.destroyAllWindows()
+    if out is not None:
+        out.release()
+    if args.show:
+        cv2.destroyAllWindows()
